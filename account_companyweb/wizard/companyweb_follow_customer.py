@@ -23,42 +23,49 @@ from openerp import models, fields, api, registry
 from openerp.exceptions import Warning
 
 
-class CwebUpdate(models.TransientModel):
-    _name = 'res.partner.cwebupdate'
+class CompanywebFollowCustomer(models.TransientModel):
+    _name = 'companyweb.follow.customer'
 
     count = fields.Integer('Count', readonly=True)
+    count_ignored = fields.Integer('Ignored', readonly=True)
 
     @api.model
     def default_get(self, fields):
         """
         Use active_ids from the context to fetch the count of clients.
         """
+        result = super(CompanywebFollowCustomer, self).default_get(fields)
+
         record_ids = self._context.get('active_ids', [])
-        res = super(CwebUpdate, self).default_get(fields)
         partner_env = self.env['res.partner']
         partners = partner_env.search(
             [('is_company', '=', True),
              ('id', 'in', record_ids),
-             ('vat', '!=', False)])
-        res['count'] = len(partners)
-        return res
+             ('vat', '!=', False),
+             ('cweb_follow_customer', '=', False)])
 
-    @api.one
-    def action_update(self):
+        count_ignored = len(record_ids) - len(partners)
+
+        result.update({
+            'count': len(partners),
+            'count_ignored': count_ignored
+        })
+
+        return result
+
+    @api.multi
+    def action_add(self):
+        self.ensure_one()
+
         record_ids = self._context.get('active_ids', [])
+        partner_env = self.env['res.partner']
+        partners = partner_env.search(
+            [('is_company', '=', True),
+             ('id', 'in', record_ids),
+             ('vat', '!=', False),
+             ('cweb_follow_customer', '=', False)])
 
-        # We create a new cursor to ensure we do not loose data already retrieved
-        with registry(self.env.cr.dbname).cursor() as new_cr:
-            uid, context = self.env.uid, self.env.context
-            partner_env = api.Environment(new_cr, uid, context)['res.partner']
-            partners = partner_env.search(
-                [('is_company', '=', True),
-                 ('id', 'in', record_ids),
-                 ('vat', '!=', False)])
-            for partner in partners:
-                try:
-                    partner._cweb_refresh(force_update=not partner.cweb_lastupdate)
-                    new_cr.commit()
-                except Warning:
-                    pass
-        return {}
+        if not partners:
+            raise Warning('Please select at least one customer')
+
+        partners.add_customer_to_companyvat()

@@ -34,11 +34,11 @@ from openerp.exceptions import Warning, except_orm
 logger = logging.getLogger(__name__)
 
 
-def companyweb_getcompanydata(**params):
-    """ Send a GET request to companyweb/outcome to retrieve company data """
+def _execute_request(base_url, main_tag, **params):
+    if not base_url.endswith('?'):
+        base_url += '?'
 
-    url = "http://odm.outcome.be/alacarte_onvat.asp?"
-    url += "&".join(["%s=%s" % (k, v) for k, v in params.iteritems()])
+    url = base_url + urllib.urlencode(params)
 
     try:
         p = etree.XMLParser(no_network=False)
@@ -50,7 +50,7 @@ def companyweb_getcompanydata(**params):
                          _("Please retry and contact your "
                            "system administrator if the error persists."))
 
-    message = tree.xpath("/Companies")[0].get("Message")
+    message = tree.xpath("/{}".format(main_tag))[0].get("Message")
     if message:
         raise except_orm(_("Error loading Companyweb data:\n%s." % message),
                          _("Please check your credentials in settings/"
@@ -61,22 +61,23 @@ def companyweb_getcompanydata(**params):
                            "'cwacsone' and password 'demo' "
                            "to obtain test credentials."))
 
-    if tree.xpath("/Companies")[0].get("Count") == "0":
-        raise Warning(_("VAT number of this company is not known in the "
-                        "Companyweb database"))
+    return tree
 
-    firm = tree.xpath("/Companies/firm")
 
-    startDate = firm[0].xpath("StartDate")[0].text
-    endDate = firm[0].xpath("EndDate")[0].text
+def _parse_company_values(values):
+    startDate = values[0].xpath("StartDate")[0].text
+    endDate = values[0].xpath("EndDate")[0].text
     if endDate == "0":
         endDate = False
         endOfActivity = False
+    elif endDate == "1":
+        endDate = False
+        endOfActivity = True
     else:
         endOfActivity = True
 
     warningstxt = ""
-    for warning in firm[0].xpath("Warnings/Warning"):
+    for warning in values[0].xpath("Warnings/Warning"):
         warningstxt = warningstxt + "- " + warning.text + "\n"
 
     if endOfActivity:
@@ -85,8 +86,8 @@ def companyweb_getcompanydata(**params):
             'http://www.companyweb.be/img/barometer/' + fichier)
         source = im.read()
         score = 'STOP'
-    elif len(firm[0].xpath("Score")) > 0:
-        score = firm[0].xpath("Score")[0].text
+    elif len(values[0].xpath("Score")) > 0:
+        score = values[0].xpath("Score")[0].text
         if score[0] == '-':
             signe = "neg-"
             if len(score) == 2:
@@ -119,12 +120,12 @@ def companyweb_getcompanydata(**params):
     image = tools.image_resize_image_medium(source.encode('base64'))
 
     dicoRoot = dict()
-    for Element in firm[0]:
+    for Element in values[0]:
         dicoRoot[Element.tag] = Element.text
     balance_year = ""
-    if len(firm[0].xpath("Balans/Year")) > 0:
-        balance_year = firm[0].xpath("Balans/Year")[0].get("value")
-        for Element2 in firm[0].xpath("Balans/Year")[0]:
+    if len(values[0].xpath("Balans/Year")) > 0:
+        balance_year = values[0].xpath("Balans/Year")[0].get("value")
+        for Element2 in values[0].xpath("Balans/Year")[0]:
             if Element2.text:
                 dicoRoot[Element2.tag] = Element2.text
 
@@ -162,3 +163,74 @@ def companyweb_getcompanydata(**params):
         'employees': getFloatValue('Rub9086'),
         'prefLang': getValue('PrefLang'),
     }
+
+
+def companyweb_getcompanydata(**params):
+    """ Send a GET request to companyweb/outcome to retrieve company data """
+
+    base_url = "http://odm.outcome.be/alacarte_onvat.asp?"
+    tree = _execute_request(base_url, 'Companies', **params)
+
+    if tree.xpath("/Companies")[0].get("Count") == "0":
+        raise Warning(_("VAT number of this company is not known in the "
+                        "Companyweb database"))
+
+    firm = tree.xpath("/Companies/firm")
+
+    return _parse_company_values(firm)
+
+
+def companyweb_get_summary(**params):
+    base_url = "http://odm.outcome.be/xmlfollowup.asp?"
+
+    tree = _execute_request(base_url, 'modlist', **params)
+
+    # TODO Only for test !!!!!
+    result = '<modlist Count="3" Message=""><mod datum="20170311" aantal="50"/></modlist>'
+    tree = etree.fromstring(result)
+
+    results = []
+    for modification in tree.xpath('/modlist')[0].getchildren():
+        results.append({
+            'date': modification.get('datum'),
+            'nbr_of_customers': modification.get('aantal')
+        })
+
+    return  results
+
+
+def companyweb_get_allchange(**params):
+    base_url = 'http://odm.outcome.be/xmlfollowup_onday.asp?'
+
+    tree = _execute_request(base_url, 'modlist', **params)
+
+    results = ['BE' + mod.get('vat')
+               for mod
+               in tree.xpath('/modlist')[0].getchildren()]
+
+    return results
+
+
+def companyweb_get_last_change(**params):
+    base_url = 'http://odm.outcome.be/xmlfollowup_onvat.asp?'
+
+    tree = _execute_request(base_url, 'Companies', **params)
+
+    if tree.xpath("/Companies")[0].get("Count") == "0":
+        raise Warning(_("VAT number of this company is not known in the "
+                        "Companyweb database"))
+
+    firm = tree.xpath("/Companies/firm")
+
+    return _parse_company_values(firm)
+
+
+def companyweb_add_vat(**params):
+    base_url = 'http://odm.outcome.be/xmlfollowup_addvat.asp?'
+
+    tree = _execute_request(base_url, 'Companies', **params)
+
+    company = tree.xpath('/Companies')
+
+    is_added = company[0].get('Updated') == '1'
+    return is_added
