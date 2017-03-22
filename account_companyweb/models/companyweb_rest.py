@@ -185,10 +185,6 @@ def companyweb_get_summary(**params):
 
     tree = _execute_request(base_url, 'modlist', **params)
 
-    # TODO Only for test !!!!!
-    result = '<modlist Count="3" Message=""><mod datum="20170311" aantal="50"/></modlist>'
-    tree = etree.fromstring(result)
-
     results = []
     for modification in tree.xpath('/modlist')[0].getchildren():
         results.append({
